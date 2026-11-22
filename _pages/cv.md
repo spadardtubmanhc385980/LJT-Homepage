@@ -38,7 +38,8 @@ Research Skills
 
 Publications
 ======
-{% for post in site.publications reversed %}
+{% assign publications = site.publications | sort: 'publication_year' | reverse %}
+{% for post in publications %}
   {% include archive-single-cv.html %}
 {% endfor %}
 
