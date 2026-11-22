@@ -180,12 +180,9 @@ jobs:
 
           def request(method, url, data=None):
               body = json.dumps(data).encode() if data is not None else None
-              request_headers = dict(headers)
-              if url.endswith('/actions/artifacts/') or url.endswith('/zip'):
-                  request_headers.pop('Authorization')
               retry = 0
               while True:
-                  req = urllib.request.Request(url, data=body, headers=request_headers, method=method)
+                  req = urllib.request.Request(url, data=body, headers=headers, method=method)
                   try:
                       response = urllib.request.urlopen(req)
                   except urllib.error.HTTPError as error:
@@ -198,8 +195,8 @@ jobs:
                   else:
                       result = response.read()
                       response.close()
-                      if body is None:
-                          return json.loads(result) if result else None
+                      if result:
+                          return json.loads(result)
                       return
                   time.sleep(delay)
 
@@ -210,8 +207,8 @@ jobs:
                   relative = path.relative_to(site_root).as_posix()
                   if relative.startswith('_site/'):
                       relative = relative[len('_site/'):]
-                      if not relative:
-                          raise RuntimeError('Missing generated site path')
+                  if not relative:
+                      raise RuntimeError('Missing generated site path')
                   files[relative] = path.read_bytes()
 
           tree_entries = []
