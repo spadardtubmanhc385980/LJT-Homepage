@@ -3,11 +3,6 @@ name: Deploy personal site to GitHub Pages
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - '_data/navigation.yml'
-      - '_pages/**'
-      - '_publications/**'
-      - '_config.yml'
   workflow_dispatch:
 
 permissions:
@@ -150,8 +145,6 @@ jobs:
         uses: actions/upload-pages-artifact@v5.0.0
 
   publish:
-    # This repository's workflow token cannot create a Pages site via the Pages
-    # API, so deploy the same Jekyll artifact to the standard GitHub Pages branch.
     needs: build
     runs-on: ubuntu-24.04
     steps:
@@ -180,9 +173,11 @@ jobs:
 
           def request(method, url, data=None):
               body = json.dumps(data).encode() if data is not None else None
+              # Artifact downloads use a pre-authenticated download URL.
+              request_headers = headers if url.startswith('https://api.github.com/') else {}
               retry = 0
               while True:
-                  req = urllib.request.Request(url, data=body, headers=headers, method=method)
+                  req = urllib.request.Request(url, data=body, headers=request_headers, method=method)
                   try:
                       response = urllib.request.urlopen(req)
                   except urllib.error.HTTPError as error:
