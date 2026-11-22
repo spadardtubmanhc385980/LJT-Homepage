@@ -3,6 +3,11 @@ name: Deploy personal site to GitHub Pages
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '_data/navigation.yml'
+      - '_pages/**'
+      - '_publications/**'
+      - '_config.yml'
   workflow_dispatch:
 
 permissions:
@@ -137,21 +142,9 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5.0.0
 
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
-
   publish:
-    # GitHub's built-in Pages creation API is not accessible to the workflow token
-    # on this repository. Publish the generated HTML using the existing contents
-    # permission on the standard GitHub Pages branch.
+    # This repository's workflow token cannot create a Pages site via the Pages
+    # API, so deploy the same Jekyll artifact to the standard GitHub Pages branch.
     needs: build
     runs-on: ubuntu-24.04
     steps:
@@ -172,17 +165,17 @@ jobs:
 
           repository = os.environ['GITHUB_REPOSITORY']
           api = 'https://api.github.com/repos/' + repository
-          authenticated = {
+          headers = {
               'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
               'Accept': 'application/vnd.github+json',
               'X-GitHub-Api-Version': '2022-11-28',
           }
 
-          def request(method, url, data=None, headers=None):
+          def request(method, url, data=None):
               body = json.dumps(data).encode() if data is not None else None
               retry = 0
               while True:
-                  req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+                  req = urllib.request.Request(url, data=body, headers=headers, method=method)
                   try:
                       response = urllib.request.urlopen(req)
                   except urllib.error.HTTPError as error:
@@ -200,9 +193,9 @@ jobs:
                       return
                   time.sleep(delay)
 
-          artifacts = request('GET', api + '/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/artifacts', headers=authenticated)
+          artifacts = request('GET', api + '/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/artifacts')
           artifact = next(item for item in artifacts['artifacts'] if item['name'] == 'github-pages' and not item['expired'])
-          archive = request('GET', artifact['archive_download_url'], headers=authenticated)
+          archive = request('GET', artifact['archive_download_url'])
           files = {}
           with zipfile.ZipFile(io.BytesIO(archive)) as archive_file:
               for item in archive_file.infolist():
@@ -217,33 +210,28 @@ jobs:
               request('POST', api + '/git/blobs', {
                   'content': base64.b64encode(content).decode(),
                   'encoding': 'base64',
-              }, headers=authenticated)
+              })
               tree_entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': digest})
 
-          tree = request('POST', api + '/git/trees', {'tree': tree_entries}, headers=authenticated)
-          ref_url = api + '/git/ref/heads/gh-pages'
+          tree = request('POST', api + '/git/trees', {'tree': tree_entries})
           try:
-              previous = request('GET', ref_url, headers=authenticated)
+              previous = request('GET', api + '/git/refs/heads/gh-pages')
               parent = previous['object']['sha']
           except RuntimeError as error:
               if 'HTTP 404:' not in str(error):
                   raise
               parent = None
-          request('POST', api + '/git/commits', {
-              'tree': tree['sha'],
-              'message': 'Deploy personal homepage',
-              **({'parents': [parent]} if parent is not None else {}),
-          }, headers=authenticated)
-          commit = request('POST', api + '/git/commits/' + tree['sha'], {
-              'tree': tree['sha'],
-              'message': 'Deploy personal homepage',
-              **({'parents': [parent]} if parent is not None else {}),
-          }, headers=authenticated)
 
+          commit = request('POST', api + '/git/commits', {
+              'tree': tree['sha'],
+              'message': 'Deploy personal homepage',
+              **({'parents': [parent]} if parent is not None else {}),
+          })
+          ref = 'refs/heads/gh-pages'
           if parent is None:
-              request('POST', api + '/git/refs', {'ref': 'refs/heads/gh-pages', 'sha': commit['sha']}, headers=authenticated)
+              request('POST', api + '/git/refs', {'ref': ref, 'sha': commit['sha']})
           else:
-              request('PATCH', api + '/git/refs/heads/gh-pages', {'sha': commit['sha'], 'force': True}, headers=authenticated)
+              request('PATCH', api + '/git/refs/heads/gh-pages', {'sha': commit['sha'], 'force': True})
 
           print('Published ' + str(len(files)) + ' generated file(s) to gh-pages.')
           EOF
