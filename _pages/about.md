@@ -9,6 +9,8 @@ redirect_from:
 
 I am a first-year Ph.D. candidate in the HKUST NLP Group, supervised by Professor Junxian He. My research focuses on natural language processing and machine learning, with particular interests in LLM reasoning and reinforcement learning, hallucination in vision-language models, and truthfulness and interpretability in LLMs.
 
+During my undergraduate studies, I was also advised by Professor Junxian He.
+
 Education
 ======
 - **Ph.D. in Computer Science** (2024-Present)  

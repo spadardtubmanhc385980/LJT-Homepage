@@ -3,12 +3,6 @@ name: Deploy personal site to GitHub Pages
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - '_data/navigation.yml'
-      - '_pages/**'
-      - '_publications/**'
-      - '_config.yml'
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -22,7 +16,6 @@ concurrency:
 
 jobs:
   clean:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -136,14 +129,8 @@ jobs:
         run: |
           uglifyjs assets/js/plugins/jquery.greedy-navigation.js assets/js/_main.js assets/js/theme.js -c -m -o assets/js/main.min.js
 
-      - name: Configure GitHub Pages
-        id: pages
-        uses: actions/configure-pages@v6.0.0
-        with:
-          enablement: true
-
       - name: Build with Jekyll
-        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        run: bundle exec jekyll build --baseurl '/LJT-Homepage'
         env:
           JEKYLL_ENV: production
 
@@ -151,7 +138,6 @@ jobs:
         uses: actions/upload-pages-artifact@v5.0.0
 
   deploy:
-    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -161,3 +147,103 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+  publish:
+    # GitHub's built-in Pages creation API is not accessible to the workflow token
+    # on this repository. Publish the generated HTML using the existing contents
+    # permission on the standard GitHub Pages branch.
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish generated site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 << 'EOF'
+          import base64
+          import hashlib
+          import io
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          import zipfile
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          api = 'https://api.github.com/repos/' + repository
+          authenticated = {
+              'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+
+          def request(method, url, data=None, headers=None):
+              body = json.dumps(data).encode() if data is not None else None
+              retry = 0
+              while True:
+                  req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+                  try:
+                      response = urllib.request.urlopen(req)
+                  except urllib.error.HTTPError as error:
+                      if error.code < 500 and error.code not in (403, 409, 429):
+                          raise RuntimeError('HTTP ' + str(error.code) + ': ' + error.read().decode())
+                      retry += 1
+                      if retry > 4:
+                          raise RuntimeError('HTTP ' + str(error.code) + ': ' + error.read().decode())
+                      delay = 2 ** retry
+                  else:
+                      result = response.read()
+                      response.close()
+                      if body is None:
+                          return json.loads(result) if result else None
+                      return
+                  time.sleep(delay)
+
+          artifacts = request('GET', api + '/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/artifacts', headers=authenticated)
+          artifact = next(item for item in artifacts['artifacts'] if item['name'] == 'github-pages' and not item['expired'])
+          archive = request('GET', artifact['archive_download_url'], headers=authenticated)
+          files = {}
+          with zipfile.ZipFile(io.BytesIO(archive)) as archive_file:
+              for item in archive_file.infolist():
+                  if not item.is_dir():
+                      if not item.filename.startswith('_site/'):
+                          raise RuntimeError('Unexpected generated file path: ' + item.filename)
+                      files[item.filename[len('_site/'):]] = archive_file.read(item)
+
+          tree_entries = []
+          for path, content in sorted(files.items()):
+              digest = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+              request('POST', api + '/git/blobs', {
+                  'content': base64.b64encode(content).decode(),
+                  'encoding': 'base64',
+              }, headers=authenticated)
+              tree_entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': digest})
+
+          tree = request('POST', api + '/git/trees', {'tree': tree_entries}, headers=authenticated)
+          ref_url = api + '/git/ref/heads/gh-pages'
+          try:
+              previous = request('GET', ref_url, headers=authenticated)
+              parent = previous['object']['sha']
+          except RuntimeError as error:
+              if 'HTTP 404:' not in str(error):
+                  raise
+              parent = None
+          request('POST', api + '/git/commits', {
+              'tree': tree['sha'],
+              'message': 'Deploy personal homepage',
+              **({'parents': [parent]} if parent is not None else {}),
+          }, headers=authenticated)
+          commit = request('POST', api + '/git/commits/' + tree['sha'], {
+              'tree': tree['sha'],
+              'message': 'Deploy personal homepage',
+              **({'parents': [parent]} if parent is not None else {}),
+          }, headers=authenticated)
+
+          if parent is None:
+              request('POST', api + '/git/refs', {'ref': 'refs/heads/gh-pages', 'sha': commit['sha']}, headers=authenticated)
+          else:
+              request('PATCH', api + '/git/refs/heads/gh-pages', {'sha': commit['sha'], 'force': True}, headers=authenticated)
+
+          print('Published ' + str(len(files)) + ' generated file(s) to gh-pages.')
+          EOF
