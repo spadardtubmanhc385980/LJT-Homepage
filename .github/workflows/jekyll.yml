@@ -3,6 +3,12 @@ name: Deploy personal site to GitHub Pages
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '_data/navigation.yml'
+      - '_pages/**'
+      - '_publications/**'
+      - '_config.yml'
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -16,6 +22,7 @@ concurrency:
 
 jobs:
   clean:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -26,7 +33,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 << 'EOF'
-          import base64
           import json
           import os
           import time
@@ -75,7 +81,7 @@ jobs:
 
           tree = request('GET', base + '/git/trees/master?recursive=1')
           removals = []
-          if is_demo(tree['path']):
+          if tree.get('path') and is_demo(tree['path']):
               removals.append(tree['path'])
           removals.extend(item['path'] for item in tree.get('tree', []) if item['type'] == 'blob' and is_demo(item['path']))
 
@@ -105,6 +111,7 @@ jobs:
           EOF
 
   build:
+    if: always() && (needs.clean.result == 'success' || needs.clean.result == 'skipped')
     needs: clean
     runs-on: ubuntu-24.04
     steps:
@@ -142,6 +149,7 @@ jobs:
         uses: actions/upload-pages-artifact@v5.0.0
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
