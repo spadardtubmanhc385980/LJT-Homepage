@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -15,13 +15,103 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  clean:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      - name: Remove example content from the published site
+      - name: Remove demonstration files from the repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 << 'EOF'
+          import base64
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          base = 'https://api.github.com/repos/' + repository
+          headers = {
+              'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+
+          def request(method, url, data=None):
+              body = json.dumps(data).encode() if data is not None else None
+              retry = 0
+              while True:
+                  http_request = urllib.request.Request(url, data=body, headers=headers, method=method)
+                  try:
+                      response = urllib.request.urlopen(http_request)
+                  except urllib.error.HTTPError as error:
+                      if error.code < 500 and error.code not in (403, 409, 429):
+                          raise
+                      retry += 1
+                      if retry > 4:
+                          raise
+                      delay = 2 ** retry
+                  else:
+                      if body is None:
+                          return json.load(response)
+                      response.read()
+                      return
+                  time.sleep(delay)
+
+          def is_demo(path):
+              if path in ('_data/authors.yml', '_data/comments', 'talkmap.py', 'talkmap.ipynb', 'talkmap_out.ipynb'):
+                  return True
+              root = path.split('/', 1)[0]
+              if root in ('_drafts', '_posts', '_talks', '_teaching', '_portfolio', 'files', 'markdown_generator', 'talkmap'):
+                  return True
+              if root == '_pages' and path.rsplit('/', 1)[-1] not in ('about.md', 'cv.md', 'publications.html', '404.md'):
+                  return True
+              return False
+
+          tree = request('GET', base + '/git/trees/master?recursive=1')
+          removals = []
+          if is_demo(tree['path']):
+              removals.append(tree['path'])
+          removals.extend(item['path'] for item in tree.get('tree', []) if item['type'] == 'blob' and is_demo(item['path']))
+
+          for path in removals:
+              had_error = False
+              for _ in range(6):
+                  quoted = urllib.parse.quote(path, safe='')
+                  try:
+                      blob = request('GET', base + '/contents/' + quoted)
+                  except urllib.error.HTTPError as error:
+                      if error.code == 404:
+                          had_error = False
+                          break
+                      had_error = True
+                      time.sleep(2)
+                  else:
+                      had_error = False
+                      request('DELETE', base + '/contents/' + quoted, {
+                          'sha': blob['sha'],
+                          'message': 'Remove AcademicPages demonstration content',
+                          'branch': 'master',
+                      })
+                      break
+              if had_error:
+                  raise RuntimeError('Could not remove demonstration file: ' + path)
+          print('Removed ' + str(len(removals)) + ' demonstration file(s).')
+          EOF
+
+  build:
+    needs: clean
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Remove any remaining example content from the published site
         run: |
           rm -rf _drafts _posts _talks _teaching _portfolio files markdown_generator talkmap
           rm -f talkmap.py talkmap.ipynb talkmap_out.ipynb _data/authors.yml
@@ -32,12 +122,8 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1.328.0
-        with:
-          ruby-version: '3.1'
-          bundler-cache: true
-          cache-version: 0
+      - name: Install UglifyJS
+        run: npm install -g uglify-js
 
       - name: Prepare JavaScript
         run: |
@@ -59,8 +145,8 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    needs: build
     runs-on: ubuntu-latest
+    needs: build
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
