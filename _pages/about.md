@@ -13,7 +13,7 @@ Education
 ======
 - **Ph.D. in Computer Science** (2024-Present)  
   Hong Kong University of Science and Technology  
-  Research group: [HKUST NLP Group](https://spadardtubmanhc385980.github.io/LJT-Homepage/)
+  Research group: HKUST NLP Group
 - **B.Eng.** (2020-2024)  
   Shanghai Jiao Tong University (SJTU)  
   Graduated in June 2024  
